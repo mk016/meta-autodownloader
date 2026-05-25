@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "brew": "^0.0.8",
+    "homebrew": "^0.1.0"
+  }
+}
