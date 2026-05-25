@@ -2,6 +2,11 @@ console.log("Meta AI Flow v2.0 Content Script loaded!");
 
 // Listen for messages from background script or sidepanel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === "PING") {
+    sendResponse({ active: true });
+    return true;
+  }
+
   if (message.action === "EXECUTE_PROMPT") {
     executePromptAutomation(message.prompt, message.index)
       .then((urls) => {
@@ -56,6 +61,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: err.message });
       });
     return true;
+  }
+
+  if (message.action === "START_SELECTION_MODE") {
+    startOnPageSelection();
+    sendResponse({ success: true });
+  }
+
+  if (message.action === "STOP_SELECTION_MODE") {
+    stopOnPageSelection();
+    sendResponse({ success: true });
+  }
+
+  if (message.action === "SYNC_SELECTION_FROM_SIDEPANEL") {
+    syncSelectionFromSidepanel(message.selectedUrls);
+    sendResponse({ success: true });
   }
 
   return true; // Keep message channel open
@@ -531,4 +551,425 @@ function scrapePageMedia() {
 // Utility: simple promise-based delay
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ========================================
+// ON-PAGE IMAGE/VIDEO SELECTION SYSTEM
+// ========================================
+
+let selectionModeActive = false;
+let selectedOnPageMedia = new Map(); // Maps URL -> scraped item object
+let selectionStyleElement = null;
+let selectionBannerElement = null;
+let selectionScanInterval = null;
+
+// Premium selection & banner styles
+const SELECTION_STYLES = `
+  /* Selectable media elements overlay styles */
+  .meta-ai-flow-selectable {
+    pointer-events: auto !important;
+    cursor: pointer !important;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    outline: 3px solid transparent !important;
+    outline-offset: -3px !important;
+    position: relative !important;
+    z-index: 1000 !important;
+  }
+
+  .meta-ai-flow-selectable:hover {
+    outline: 4px solid #00E5FF !important;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.7) !important;
+    transform: scale(1.01) !important;
+    filter: brightness(1.05) !important;
+  }
+
+  .meta-ai-flow-selected {
+    outline: 5px solid #0066FF !important;
+    box-shadow: 0 0 30px rgba(0, 102, 255, 0.9) !important;
+    transform: scale(1.02) !important;
+    filter: brightness(1.1) !important;
+    z-index: 1001 !important;
+  }
+
+  /* Floating Control Banner */
+  #meta-ai-flow-selection-banner {
+    position: fixed !important;
+    top: 16px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 2147483647 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    gap: 20px !important;
+    
+    background: rgba(15, 17, 26, 0.85) !important;
+    backdrop-filter: blur(16px) saturate(120%) !important;
+    -webkit-backdrop-filter: blur(16px) saturate(120%) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 16px !important;
+    padding: 10px 20px !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 
+                0 0 20px rgba(0, 229, 255, 0.15) !important;
+    
+    color: #FFFFFF !important;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    
+    min-width: 480px !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    animation: bannerSlideIn 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28) forwards !important;
+  }
+
+  @keyframes bannerSlideIn {
+    from { opacity: 0; transform: translate(-50%, -30px); }
+    to { opacity: 1; transform: translate(-50%, 0); }
+  }
+
+  .banner-title {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+  }
+
+  .banner-sparkle {
+    font-size: 16px !important;
+    animation: sparkle-glow 2s infinite ease-in-out !important;
+  }
+
+  @keyframes sparkle-glow {
+    0% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(0,229,255,0.4)); }
+    50% { transform: scale(1.2); filter: drop-shadow(0 0 8px rgba(0,229,255,0.8)); }
+    100% { transform: scale(1); filter: drop-shadow(0 0 2px rgba(0,229,255,0.4)); }
+  }
+
+  .banner-text {
+    font-weight: 600 !important;
+    letter-spacing: 0.3px !important;
+  }
+
+  .banner-badge {
+    background: rgba(0, 229, 255, 0.12) !important;
+    color: #00E5FF !important;
+    border: 1px solid rgba(0, 229, 255, 0.25) !important;
+    border-radius: 20px !important;
+    padding: 3px 10px !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+    text-transform: uppercase !important;
+    box-shadow: 0 0 8px rgba(0, 229, 255, 0.1) !important;
+  }
+
+  .banner-actions {
+    display: flex !important;
+    gap: 8px !important;
+  }
+
+  .banner-btn {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    border-radius: 8px !important;
+    padding: 6px 14px !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    user-select: none !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  .banner-btn.primary {
+    background: linear-gradient(135deg, #0052D4 0%, #4364F7 100%) !important;
+    color: #FFFFFF !important;
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(67, 100, 247, 0.3) !important;
+  }
+
+  .banner-btn.primary:hover:not(:disabled) {
+    filter: brightness(1.1) !important;
+    box-shadow: 0 4px 12px rgba(67, 100, 247, 0.5) !important;
+    transform: translateY(-1px) !important;
+  }
+
+  .banner-btn.primary:disabled {
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+  }
+
+  .banner-btn.secondary {
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: #FFFFFF !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  }
+
+  .banner-btn.secondary:hover {
+    background: rgba(255, 255, 255, 0.15) !important;
+    border-color: rgba(255, 255, 255, 0.25) !important;
+    transform: translateY(-1px) !important;
+  }
+
+  .banner-btn:active {
+    transform: translateY(0) !important;
+  }
+`;
+
+function startOnPageSelection() {
+  if (selectionModeActive) return;
+  selectionModeActive = true;
+  selectedOnPageMedia.clear();
+
+  // 1. Inject styling
+  selectionStyleElement = document.createElement('style');
+  selectionStyleElement.id = 'meta-ai-flow-selection-styles';
+  selectionStyleElement.textContent = SELECTION_STYLES;
+  document.head.appendChild(selectionStyleElement);
+
+  // 2. Inject floating banner
+  selectionBannerElement = document.createElement('div');
+  selectionBannerElement.id = 'meta-ai-flow-selection-banner';
+  selectionBannerElement.innerHTML = `
+    <div class="banner-title">
+      <span class="banner-sparkle">✨</span>
+      <span class="banner-text">SELECT ON PAGE</span>
+    </div>
+    <div class="banner-badge" id="meta-ai-flow-count-badge">0 SELECTED</div>
+    <div class="banner-actions">
+      <button id="meta-ai-flow-btn-download" class="banner-btn primary" disabled>DOWNLOAD SELECTED</button>
+      <button id="meta-ai-flow-btn-cancel" class="banner-btn secondary">DONE</button>
+    </div>
+  `;
+  document.body.appendChild(selectionBannerElement);
+
+  // Wire banner button events
+  document.getElementById('meta-ai-flow-btn-cancel').addEventListener('click', stopOnPageSelection);
+  document.getElementById('meta-ai-flow-btn-download').addEventListener('click', () => {
+    const items = Array.from(selectedOnPageMedia.values());
+    if (items.length > 0) {
+      chrome.runtime.sendMessage({
+        action: "DOWNLOAD_ON_PAGE_ITEMS",
+        items: items
+      });
+      // Deactivate selection mode after triggering download
+      stopOnPageSelection();
+    }
+  });
+
+  // 3. Scan & attach styles to existing generated images/videos
+  scanAndSetupSelectableElements();
+
+  // 4. Set interval to scan for newly loaded items (during scrolling or live generation)
+  selectionScanInterval = setInterval(scanAndSetupSelectableElements, 1000);
+
+  // 5. Add global click intercepting listener (Capturing phase)
+  document.addEventListener('click', handleOnPageClick, true);
+
+  console.log("On-page selection mode active");
+}
+
+function stopOnPageSelection() {
+  if (!selectionModeActive) return;
+  selectionModeActive = false;
+
+  // 1. Remove style block
+  if (selectionStyleElement) {
+    selectionStyleElement.remove();
+    selectionStyleElement = null;
+  }
+
+  // 2. Remove banner
+  if (selectionBannerElement) {
+    selectionBannerElement.remove();
+    selectionBannerElement = null;
+  }
+
+  // 3. Clean up scan interval
+  if (selectionScanInterval) {
+    clearInterval(selectionScanInterval);
+    selectionScanInterval = null;
+  }
+
+  // 4. Remove classes from elements
+  document.querySelectorAll('.meta-ai-flow-selectable').forEach(el => {
+    el.classList.remove('meta-ai-flow-selectable', 'meta-ai-flow-selected');
+  });
+
+  // 5. Remove global click intercepting listener
+  document.removeEventListener('click', handleOnPageClick, true);
+
+  // 6. Notify sidepanel
+  chrome.runtime.sendMessage({
+    action: "ON_PAGE_SELECTION_STOPPED"
+  });
+
+  selectedOnPageMedia.clear();
+  console.log("On-page selection mode stopped");
+}
+
+function scanAndSetupSelectableElements() {
+  if (!selectionModeActive) return;
+
+  const imgs = document.querySelectorAll('img');
+  imgs.forEach(img => {
+    const src = img.src || img.getAttribute('src');
+    if (src && isAIResource(src)) {
+      if (img.naturalWidth > 150 || img.width > 150 || !img.naturalWidth) {
+        if (!img.classList.contains('meta-ai-flow-selectable')) {
+          img.classList.add('meta-ai-flow-selectable');
+        }
+        
+        // Sync selected state visually
+        if (selectedOnPageMedia.has(src)) {
+          img.classList.add('meta-ai-flow-selected');
+        } else {
+          img.classList.remove('meta-ai-flow-selected');
+        }
+      }
+    }
+  });
+
+  const vids = document.querySelectorAll('video');
+  vids.forEach(vid => {
+    const src = vid.src || vid.currentSrc || vid.querySelector('source')?.src;
+    if (src) {
+      if (!vid.classList.contains('meta-ai-flow-selectable')) {
+        vid.classList.add('meta-ai-flow-selectable');
+      }
+      
+      // Sync selected state visually
+      if (selectedOnPageMedia.has(src)) {
+        vid.classList.add('meta-ai-flow-selected');
+      } else {
+        vid.classList.remove('meta-ai-flow-selected');
+      }
+    }
+  });
+}
+
+function handleOnPageClick(e) {
+  if (!selectionModeActive) return;
+
+  // Let floating banner buttons process clicks
+  if (e.target.closest('#meta-ai-flow-selection-banner')) return;
+
+  const target = e.target;
+  
+  // If clicked element is selectable
+  if (target.classList.contains('meta-ai-flow-selectable')) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const src = target.src || target.getAttribute('src') || target.currentSrc || target.querySelector('source')?.src;
+    if (src) {
+      toggleOnPageMediaSelection(target, src);
+    }
+    return;
+  }
+  
+  // If clicked element's parent has selectable element (helpful fallback)
+  const selectableChild = target.querySelector('.meta-ai-flow-selectable');
+  if (selectableChild) {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const src = selectableChild.src || selectableChild.getAttribute('src') || selectableChild.currentSrc || selectableChild.querySelector('source')?.src;
+    if (src) {
+      toggleOnPageMediaSelection(selectableChild, src);
+    }
+    return;
+  }
+}
+
+function toggleOnPageMediaSelection(element, url) {
+  let type = element.tagName.toLowerCase() === 'video' ? 'video' : 'image';
+  
+  let promptText = element.alt || element.getAttribute('aria-label') || "";
+  if (!promptText) {
+    let parentBubble = element.closest('[role="article"]') || element.closest('.chat-message') || element.parentElement;
+    if (parentBubble) {
+      promptText = parentBubble.innerText?.substring(0, 100) || "";
+    }
+  }
+  
+  const selector = getUniqueSelector(element);
+  const width = element.naturalWidth || element.width || element.videoWidth || 0;
+  const height = element.naturalHeight || element.height || element.videoHeight || 0;
+  
+  const item = {
+    type: type,
+    url: url,
+    prompt: promptText.trim(),
+    selector: selector,
+    width: width,
+    height: height
+  };
+
+  if (selectedOnPageMedia.has(url)) {
+    selectedOnPageMedia.delete(url);
+    element.classList.remove('meta-ai-flow-selected');
+  } else {
+    selectedOnPageMedia.set(url, item);
+    element.classList.add('meta-ai-flow-selected');
+  }
+
+  updateOnPageBannerUI();
+  
+  // Sync to sidepanel
+  chrome.runtime.sendMessage({
+    action: "ON_PAGE_SELECTION_CHANGED",
+    selectedUrls: Array.from(selectedOnPageMedia.keys())
+  });
+}
+
+function updateOnPageBannerUI() {
+  const badge = document.getElementById('meta-ai-flow-count-badge');
+  const btnDownload = document.getElementById('meta-ai-flow-btn-download');
+  
+  if (badge) {
+    badge.textContent = `${selectedOnPageMedia.size} SELECTED`;
+  }
+  
+  if (btnDownload) {
+    btnDownload.disabled = selectedOnPageMedia.size === 0;
+    btnDownload.textContent = selectedOnPageMedia.size > 0 
+      ? `DOWNLOAD SELECTED (${selectedOnPageMedia.size})` 
+      : `DOWNLOAD SELECTED`;
+  }
+}
+
+function syncSelectionFromSidepanel(selectedUrls) {
+  if (!selectionModeActive) return;
+  
+  selectedOnPageMedia.clear();
+  
+  // Update selection map based on urls from sidepanel
+  selectedUrls.forEach(url => {
+    // Find matching element to extract details
+    const els = document.querySelectorAll('img, video');
+    for (const el of els) {
+      const src = el.src || el.getAttribute('src') || el.currentSrc || el.querySelector('source')?.src;
+      if (src === url) {
+        let type = el.tagName.toLowerCase() === 'video' ? 'video' : 'image';
+        let promptText = el.alt || el.getAttribute('aria-label') || "";
+        const selector = getUniqueSelector(el);
+        const item = {
+          type: type,
+          url: url,
+          prompt: promptText.trim(),
+          selector: selector,
+          width: el.naturalWidth || el.width || el.videoWidth || 0,
+          height: el.naturalHeight || el.height || el.videoHeight || 0
+        };
+        selectedOnPageMedia.set(url, item);
+        break;
+      }
+    }
+  });
+
+  // Let scan sync classes visually
+  scanAndSetupSelectableElements();
+  updateOnPageBannerUI();
 }

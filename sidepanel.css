@@ -651,6 +651,18 @@ textarea {
   border-color: rgba(67, 100, 247, 0.2);
 }
 
+/* Select Mode Activation Card in Queue */
+.select-activation-card {
+  background: linear-gradient(135deg, rgba(0, 229, 255, 0.06) 0%, rgba(67, 100, 247, 0.04) 100%);
+  border-color: rgba(0, 229, 255, 0.2);
+  margin-bottom: 6px;
+}
+
+.select-star {
+  fill: var(--neon-blue) !important;
+  filter: drop-shadow(0 0 3px rgba(0, 229, 255, 0.4)) !important;
+}
+
 /* Utility Classes */
 .flex-row { display: flex; flex-direction: row; }
 .justify-between { justify-content: space-between; }
@@ -1553,6 +1565,166 @@ kbd {
 }
 
 /* ========================================
+   GENERATED IMAGES GALLERY (Preview Before Download)
+   ======================================== */
+.generated-gallery-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+}
+
+.generated-gallery-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.generated-gallery-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--text-secondary);
+}
+
+.generated-gallery-count {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.generated-gallery-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.generated-gallery-actions .btn {
+  flex: 1;
+}
+
+.generated-gallery-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+/* Each prompt group */
+.generated-prompt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  animation: slideIn 0.3s ease forwards;
+}
+
+.generated-prompt-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  background: rgba(67, 100, 247, 0.08);
+  border-radius: 4px;
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.generated-prompt-label .prompt-index {
+  color: #4364F7;
+  font-weight: 700;
+  margin-right: 4px;
+}
+
+.generated-images-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+
+.generated-image-card {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  aspect-ratio: 1;
+  background: #0a0a0f;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.generated-image-card:hover {
+  border-color: rgba(67, 100, 247, 0.5);
+  transform: scale(1.03);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.generated-image-card.selected {
+  border-color: #4364F7;
+  box-shadow: 0 0 0 1px rgba(67, 100, 247, 0.3), 0 4px 16px rgba(67, 100, 247, 0.25);
+}
+
+.generated-image-card.selected::after {
+  content: '✓';
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  background: var(--primary-gradient);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: white;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(67, 100, 247, 0.5);
+  z-index: 3;
+}
+
+.generated-image-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.9;
+  transition: opacity 0.2s ease;
+}
+
+.generated-image-card:hover img {
+  opacity: 1;
+}
+
+.generated-image-card.selected img {
+  opacity: 1;
+}
+
+.generated-image-overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  padding: 14px 6px 4px 6px;
+  pointer-events: none;
+}
+
+.generated-image-size {
+  font-size: 8px;
+  color: rgba(255, 255, 255, 0.6);
+  text-align: right;
+}
+
+/* ========================================
    SPINNER ANIMATION
    ======================================== */
 .spinner {
@@ -1562,4 +1734,12 @@ kbd {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* On-Page Selection Toggle Button Active State */
+#btn-select-on-page.active-select {
+  background: rgba(0, 229, 255, 0.15) !important;
+  border-color: var(--neon-blue) !important;
+  color: var(--neon-blue) !important;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.3) !important;
 }

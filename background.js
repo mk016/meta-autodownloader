@@ -16,7 +16,8 @@ chrome.runtime.onInstalled.addListener(() => {
     "downloadCounter",
     "downloadHistory",
     "stats",
-    "theme"
+    "theme",
+    "pendingMedia"
   ], (result) => {
     const defaults = {};
     if (result.queue === undefined) defaults.queue = [];
@@ -46,9 +47,11 @@ chrome.runtime.onInstalled.addListener(() => {
         mediaType: "both",       // "images", "videos", "both"
         useCanvasDownload: true,  // HTML canvas download for images
         sequentialNaming: true,
-        downloadDelay: 500       // ms between individual file downloads
+        downloadDelay: 500,      // ms between individual file downloads
+        aspectRatio: "9:16"      // "9:16", "16:9", "1:1"
       };
     }
+    if (result.pendingMedia === undefined) defaults.pendingMedia = [];
     
     if (Object.keys(defaults).length > 0) {
       chrome.storage.local.set(defaults);
@@ -120,6 +123,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === "RETRY_DOWNLOAD") {
     retryDownload(message.historyIndex, sendResponse);
     return true;
+  }
+
+  if (message.action === "DOWNLOAD_PENDING_SELECTED") {
+    downloadPendingSelected(message.selectedItems, sendResponse);
+    return true;
+  }
+
+  if (message.action === "CLEAR_PENDING_MEDIA") {
+    chrome.storage.local.set({ pendingMedia: [] });
+    sendResponse({ success: true });
   }
 });
 
@@ -327,6 +340,17 @@ function processNextPrompt(preferredTabId) {
       }
     }
     
+    // Append aspect ratio instruction to prompt
+    const settings = data.settings || {};
+    const aspectRatio = settings.aspectRatio || "9:16";
+    const ratioLabels = {
+      "9:16": "portrait 9:16",
+      "16:9": "landscape 16:9",
+      "1:1": "square 1:1"
+    };
+    const ratioLabel = ratioLabels[aspectRatio] || "portrait 9:16";
+    finalPrompt = `Imagine ${finalPrompt}, generate the image in ${ratioLabel} aspect ratio`;
+    
     // Find a Meta AI tab to send the prompt to
     findMetaAITab(preferredTabId, (tab) => {
       if (!tab) {
@@ -379,57 +403,84 @@ function findAnyMetaAITab(callback) {
   });
 }
 
-// Handle completion of a prompt
+// Handle completion of a prompt — store in pendingMedia for user selection
 function handlePromptCompleted(urls, prompt, tabId) {
-  chrome.storage.local.get(["currentIndex", "settings", "queue"], (data) => {
+  chrome.storage.local.get(["currentIndex", "settings", "queue", "pendingMedia"], (data) => {
     const index = data.currentIndex || 0;
     const settings = data.settings || {};
     const queue = data.queue || [];
+    const pendingMedia = data.pendingMedia || [];
     
     // Update generated stats
     if (urls && urls.length > 0) {
       updateStats("generated");
     }
     
-    // Store files with sequential naming
+    // Store generated URLs in pendingMedia for user preview/selection
     if (urls && urls.length > 0) {
-      const folder = settings.folderName || "meta-ai-downloads";
+      pendingMedia.push({
+        urls: urls,
+        prompt: prompt || "",
+        promptIndex: index + 1,
+        timestamp: new Date().toISOString(),
+        aspectRatio: settings.aspectRatio || "9:16"
+      });
       
-      let downloadIndex = 0;
-      const downloadNext = () => {
-        if (downloadIndex >= urls.length) {
-          // All downloads queued, proceed to next prompt
-          advanceQueue(index, queue, settings, tabId);
-          return;
-        }
-        
-        const url = urls[downloadIndex];
-        const fileExt = url.includes(".mp4") || url.includes("video") ? "mp4" : "png";
-        
-        if (settings.sequentialNaming !== false) {
-          getSequentialFilename(folder, fileExt, (filename) => {
-            handleDownload(url, filename, prompt);
-            downloadIndex++;
-            // Small delay between downloads
-            setTimeout(downloadNext, settings.downloadDelay || 500);
-          });
-        } else {
-          // Legacy naming
-          const cleanPrompt = prompt.substring(0, 40).replace(/[^a-zA-Z0-9]/g, "_");
-          let filename = `${folder}/${index + 1}_${cleanPrompt}`;
-          if (urls.length > 1) filename += `_${downloadIndex + 1}`;
-          filename += `.${fileExt}`;
-          
-          handleDownload(url, filename, prompt);
-          downloadIndex++;
-          setTimeout(downloadNext, settings.downloadDelay || 500);
-        }
-      };
-      
-      downloadNext();
+      chrome.storage.local.set({ pendingMedia: pendingMedia }, () => {
+        advanceQueue(index, queue, settings, tabId);
+      });
     } else {
       advanceQueue(index, queue, settings, tabId);
     }
+  });
+}
+
+// Download only user-selected pending media items
+function downloadPendingSelected(selectedItems, sendResponse) {
+  // selectedItems = [{ url, prompt, groupIndex, imageIndex }]
+  if (!selectedItems || selectedItems.length === 0) {
+    sendResponse({ success: false, error: "No items selected" });
+    return;
+  }
+  
+  chrome.storage.local.get(["settings"], (data) => {
+    const settings = data.settings || {};
+    const folder = settings.folderName || "meta-ai-downloads";
+    let completedCount = 0;
+    let downloadIdx = 0;
+    
+    function downloadNext() {
+      if (downloadIdx >= selectedItems.length) return;
+      
+      const item = selectedItems[downloadIdx];
+      downloadIdx++;
+      
+      const fileExt = item.url.includes(".mp4") || item.url.includes("video") ? "mp4" : "png";
+      
+      if (settings.sequentialNaming !== false) {
+        getSequentialFilename(folder, fileExt, (filename) => {
+          handleDownload(item.url, filename, item.prompt || "");
+          completedCount++;
+          checkDone();
+          setTimeout(downloadNext, settings.downloadDelay || 500);
+        });
+      } else {
+        const cleanPrompt = (item.prompt || "").substring(0, 40).replace(/[^a-zA-Z0-9]/g, "_");
+        const filename = `${folder}/${item.groupIndex || 0}_${cleanPrompt}_${item.imageIndex || 0}.${fileExt}`;
+        handleDownload(item.url, filename, item.prompt || "");
+        completedCount++;
+        checkDone();
+        setTimeout(downloadNext, settings.downloadDelay || 500);
+      }
+    }
+    
+    function checkDone() {
+      if (completedCount >= selectedItems.length) {
+        sendResponse({ success: true, count: completedCount });
+      }
+    }
+    
+    downloadNext();
   });
 }
 

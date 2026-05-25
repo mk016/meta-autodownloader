@@ -27,8 +27,21 @@ document.addEventListener("DOMContentLoaded", () => {
   // Media Type Pills
   const mediaTypePills = document.querySelectorAll("#media-type-pills .pill-btn");
 
-  // Scraper
+  // Aspect Ratio Pills
+  const aspectRatioPills = document.querySelectorAll("#aspect-ratio-pills .pill-btn");
+
+  // Generated Gallery
+  const generatedGalleryPanel = document.getElementById("generated-gallery-panel");
+  const generatedGalleryGrid = document.getElementById("generated-gallery-grid");
+  const generatedGalleryCount = document.getElementById("generated-gallery-count");
+  const generatedSelectedCount = document.getElementById("generated-selected-count");
+  const btnDownloadGeneratedSelected = document.getElementById("btn-download-generated-selected");
+  const btnClearGenerated = document.getElementById("btn-clear-generated");
+
+  // Scraper & On-Page Select
   const btnScan = document.getElementById("btn-scan");
+  const btnSelectOnPage = document.getElementById("btn-select-on-page");
+  const btnSelectOnPageQueue = document.getElementById("btn-select-on-page-queue");
   const btnAutoScrollScan = document.getElementById("btn-auto-scroll-scan");
   const btnDownloadSelected = document.getElementById("btn-download-selected");
   const btnDownloadAll = document.getElementById("btn-download-all");
@@ -97,6 +110,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let currentFilter = "all";
   let currentPreviewItem = null;
   let currentPreviewIndex = -1;
+  let selectedGeneratedUrls = new Set(); // Tracks selected URLs in generated gallery
+  let onPageSelectionActive = false;
 
   // ==========================================
   // TAB NAVIGATION
@@ -230,6 +245,13 @@ document.addEventListener("DOMContentLoaded", () => {
         });
       }
 
+      // Update aspect ratio pills
+      if (settings.aspectRatio) {
+        aspectRatioPills.forEach(pill => {
+          pill.classList.toggle("active", pill.getAttribute("data-ratio") === settings.aspectRatio);
+        });
+      }
+
       // 2. Update Character Dropdowns & List
       populateCharacterSelects(characters, activeCharacterId);
       renderCharactersList(characters, activeCharacterId);
@@ -276,6 +298,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Update stats
     updateStatsUI();
+
+    // Update generated gallery
+    renderGeneratedGallery();
   }
 
   // Monitor storage changes in real-time
@@ -365,6 +390,25 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   // ==========================================
+  // ASPECT RATIO SELECTOR
+  // ==========================================
+  aspectRatioPills.forEach(pill => {
+    pill.addEventListener("click", () => {
+      aspectRatioPills.forEach(p => p.classList.remove("active"));
+      pill.classList.add("active");
+      
+      const selectedRatio = pill.getAttribute("data-ratio");
+      chrome.storage.local.get(["settings"], (data) => {
+        const settings = data.settings || {};
+        settings.aspectRatio = selectedRatio;
+        chrome.storage.local.set({ settings });
+      });
+      
+      showToast(`Aspect ratio: ${selectedRatio}`, "info");
+    });
+  });
+
+  // ==========================================
   // QUICK TEMPLATES
   // ==========================================
   templateChips.forEach(chip => {
@@ -413,6 +457,10 @@ document.addEventListener("DOMContentLoaded", () => {
     const activeMediaPill = document.querySelector("#media-type-pills .pill-btn.active");
     newSettings.mediaType = activeMediaPill ? activeMediaPill.getAttribute("data-type") : "both";
 
+    // Get current aspect ratio
+    const activeRatioPill = document.querySelector("#aspect-ratio-pills .pill-btn.active");
+    newSettings.aspectRatio = activeRatioPill ? activeRatioPill.getAttribute("data-ratio") : "9:16";
+
     chrome.storage.local.get(["status", "currentIndex"], (current) => {
       let nextIndex = current.currentIndex || 0;
       if (current.status === "idle" || nextIndex >= prompts.length) {
@@ -457,6 +505,157 @@ document.addEventListener("DOMContentLoaded", () => {
         chrome.storage.local.set({ queue: prompts });
       }
     });
+  });
+
+  // ==========================================
+  // GENERATED IMAGES GALLERY (Preview Before Download)
+  // ==========================================
+
+  function renderGeneratedGallery() {
+    chrome.storage.local.get(["pendingMedia"], (data) => {
+      const pendingMedia = data.pendingMedia || [];
+      generatedGalleryGrid.innerHTML = "";
+      
+      // Count total images
+      let totalImages = 0;
+      pendingMedia.forEach(group => {
+        totalImages += (group.urls || []).length;
+      });
+      
+      generatedGalleryCount.textContent = `${totalImages} image${totalImages !== 1 ? 's' : ''}`;
+      btnClearGenerated.disabled = pendingMedia.length === 0;
+      
+      if (pendingMedia.length === 0) {
+        generatedGalleryGrid.innerHTML = `<div class="empty-state">Generated images will appear here. Select the ones you want to download.</div>`;
+        btnDownloadGeneratedSelected.disabled = true;
+        generatedSelectedCount.textContent = "0";
+        return;
+      }
+      
+      pendingMedia.forEach((group, groupIdx) => {
+        const groupEl = document.createElement("div");
+        groupEl.className = "generated-prompt-group";
+        
+        // Prompt label
+        const labelEl = document.createElement("div");
+        labelEl.className = "generated-prompt-label";
+        labelEl.innerHTML = `<span class="prompt-index">#${group.promptIndex || groupIdx + 1}</span> ${group.prompt || 'Generated media'}`;
+        labelEl.title = group.prompt || '';
+        groupEl.appendChild(labelEl);
+        
+        // Images grid
+        const rowEl = document.createElement("div");
+        rowEl.className = "generated-images-row";
+        
+        (group.urls || []).forEach((url, imgIdx) => {
+          const card = document.createElement("div");
+          card.className = "generated-image-card";
+          
+          // Unique key for selection tracking
+          const selectionKey = `${groupIdx}_${imgIdx}_${url}`;
+          
+          if (selectedGeneratedUrls.has(selectionKey)) {
+            card.classList.add("selected");
+          }
+          
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = group.prompt || 'Generated image';
+          img.loading = "lazy";
+          card.appendChild(img);
+          
+          // Overlay with size info
+          const overlay = document.createElement("div");
+          overlay.className = "generated-image-overlay";
+          overlay.innerHTML = `<div class="generated-image-size">${group.aspectRatio || '9:16'}</div>`;
+          card.appendChild(overlay);
+          
+          // Click to toggle selection
+          card.addEventListener("click", () => {
+            if (selectedGeneratedUrls.has(selectionKey)) {
+              selectedGeneratedUrls.delete(selectionKey);
+              card.classList.remove("selected");
+            } else {
+              selectedGeneratedUrls.add(selectionKey);
+              card.classList.add("selected");
+            }
+            updateGeneratedSelectedCount();
+          });
+          
+          rowEl.appendChild(card);
+        });
+        
+        groupEl.appendChild(rowEl);
+        generatedGalleryGrid.appendChild(groupEl);
+      });
+      
+      updateGeneratedSelectedCount();
+    });
+  }
+  
+  function updateGeneratedSelectedCount() {
+    const count = selectedGeneratedUrls.size;
+    generatedSelectedCount.textContent = count;
+    btnDownloadGeneratedSelected.disabled = count === 0;
+  }
+  
+  // Download Selected from generated gallery
+  btnDownloadGeneratedSelected.addEventListener("click", () => {
+    if (selectedGeneratedUrls.size === 0) return;
+    
+    chrome.storage.local.get(["pendingMedia"], (data) => {
+      const pendingMedia = data.pendingMedia || [];
+      const selectedItems = [];
+      
+      selectedGeneratedUrls.forEach(key => {
+        const parts = key.split('_');
+        const groupIdx = parseInt(parts[0]);
+        const imgIdx = parseInt(parts[1]);
+        const url = parts.slice(2).join('_');
+        
+        if (pendingMedia[groupIdx]) {
+          selectedItems.push({
+            url: url,
+            prompt: pendingMedia[groupIdx].prompt || "",
+            groupIndex: pendingMedia[groupIdx].promptIndex || groupIdx + 1,
+            imageIndex: imgIdx + 1
+          });
+        }
+      });
+      
+      if (selectedItems.length === 0) return;
+      
+      btnDownloadGeneratedSelected.disabled = true;
+      btnDownloadGeneratedSelected.innerHTML = `<svg class="btn-icon spinner" viewBox="0 0 24 24"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.42 3.58-8 8-8z"/></svg> Downloading...`;
+      
+      chrome.runtime.sendMessage({
+        action: "DOWNLOAD_PENDING_SELECTED",
+        selectedItems: selectedItems
+      }, (response) => {
+        btnDownloadGeneratedSelected.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg> Download Selected (<span id="generated-selected-count">${selectedGeneratedUrls.size}</span>)`;
+        btnDownloadGeneratedSelected.disabled = false;
+        
+        if (response && response.success) {
+          showToast(`Downloaded ${response.count} images!`, "success");
+          // Clear selection after download
+          selectedGeneratedUrls.clear();
+          renderGeneratedGallery();
+        } else {
+          showToast("Download failed: " + (response?.error || "unknown"), "error");
+        }
+      });
+    });
+  });
+  
+  // Clear all pending generated media
+  btnClearGenerated.addEventListener("click", () => {
+    if (confirm("Clear all generated images? They won't be downloaded.")) {
+      chrome.runtime.sendMessage({ action: "CLEAR_PENDING_MEDIA" }, () => {
+        selectedGeneratedUrls.clear();
+        renderGeneratedGallery();
+        showToast("Generated images cleared", "info");
+      });
+    }
   });
 
   // ==========================================
@@ -568,6 +767,14 @@ document.addEventListener("DOMContentLoaded", () => {
     scanActivePageMedia();
   });
 
+  btnSelectOnPage.addEventListener("click", () => {
+    toggleOnPageSelectionMode();
+  });
+
+  btnSelectOnPageQueue.addEventListener("click", () => {
+    toggleOnPageSelectionMode();
+  });
+
   btnAutoScrollScan.addEventListener("click", () => {
     autoScrollScan();
   });
@@ -583,19 +790,27 @@ document.addEventListener("DOMContentLoaded", () => {
 
       btnScan.innerHTML = `<svg class="btn-icon spinner" viewBox="0 0 24 24"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.42 3.58-8 8-8z"/></svg> Scanning...`;
 
-      chrome.tabs.sendMessage(activeTab.id, { action: "SCRAPE_PAGE" }, (response) => {
-        btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
-        
-        if (chrome.runtime.lastError || !response || !response.media) {
-          console.error("Scraping error:", chrome.runtime.lastError);
-          scraperGallery.innerHTML = `<div class="empty-state">Failed to scan. Ensure you are on meta.ai and reload the page.</div>`;
-          showToast("Scan failed. Reload meta.ai page.", "error");
+      ensureContentScriptActive(activeTab.id, (isActive) => {
+        if (!isActive) {
+          btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
+          showToast("Failed to initialize scanner. Reload meta.ai page.", "error");
           return;
         }
 
-        scrapedMediaList = response.media;
-        renderScraperGallery(scrapedMediaList);
-        showToast(`Found ${scrapedMediaList.length} media items`, "success");
+        chrome.tabs.sendMessage(activeTab.id, { action: "SCRAPE_PAGE" }, (response) => {
+          btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
+          
+          if (chrome.runtime.lastError || !response || !response.media) {
+            console.error("Scraping error:", chrome.runtime.lastError);
+            scraperGallery.innerHTML = `<div class="empty-state">Failed to scan. Ensure you are on meta.ai and reload the page.</div>`;
+            showToast("Scan failed. Reload meta.ai page.", "error");
+            return;
+          }
+
+          scrapedMediaList = response.media;
+          renderScraperGallery(scrapedMediaList);
+          showToast(`Found ${scrapedMediaList.length} media items`, "success");
+        });
       });
     });
   }
@@ -611,18 +826,27 @@ document.addEventListener("DOMContentLoaded", () => {
       btnAutoScrollScan.innerHTML = `<svg class="btn-icon spinner" viewBox="0 0 24 24"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.42 3.58-8 8-8z"/></svg> Scrolling...`;
       btnAutoScrollScan.disabled = true;
 
-      chrome.tabs.sendMessage(activeTab.id, { action: "AUTO_SCROLL_SCRAPE" }, (response) => {
-        btnAutoScrollScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></svg> Auto-Scroll`;
-        btnAutoScrollScan.disabled = false;
-
-        if (chrome.runtime.lastError || !response || !response.media) {
-          showToast("Auto-scroll scan failed", "error");
+      ensureContentScriptActive(activeTab.id, (isActive) => {
+        if (!isActive) {
+          btnAutoScrollScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></svg> Auto-Scroll`;
+          btnAutoScrollScan.disabled = false;
+          showToast("Failed to initialize auto-scroll. Reload meta.ai page.", "error");
           return;
         }
 
-        scrapedMediaList = response.media;
-        renderScraperGallery(scrapedMediaList);
-        showToast(`Auto-scroll found ${scrapedMediaList.length} items!`, "success");
+        chrome.tabs.sendMessage(activeTab.id, { action: "AUTO_SCROLL_SCRAPE" }, (response) => {
+          btnAutoScrollScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></svg> Auto-Scroll`;
+          btnAutoScrollScan.disabled = false;
+
+          if (chrome.runtime.lastError || !response || !response.media) {
+            showToast("Auto-scroll scan failed", "error");
+            return;
+          }
+
+          scrapedMediaList = response.media;
+          renderScraperGallery(scrapedMediaList);
+          showToast(`Auto-scroll found ${scrapedMediaList.length} items!`, "success");
+        });
       });
     });
   }
@@ -757,6 +981,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const count = checkedBoxes.length;
     selectedCountSpan.textContent = count;
     btnDownloadSelected.disabled = count === 0;
+    
+    // Sync selection back to the page if select mode is active
+    syncSelectionToPage();
   }
 
   // ==========================================
@@ -766,6 +993,28 @@ document.addEventListener("DOMContentLoaded", () => {
   function getActiveTab(callback) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       callback(tabs[0] || null);
+    });
+  }
+
+  function ensureContentScriptActive(tabId, callback) {
+    chrome.tabs.sendMessage(tabId, { action: "PING" }, (response) => {
+      if (chrome.runtime.lastError || !response) {
+        console.log("Content script not active on tab", tabId, ". Injecting dynamically...");
+        chrome.scripting.executeScript({
+          target: { tabId: tabId },
+          files: ["content.js"]
+        }, () => {
+          if (chrome.runtime.lastError) {
+            console.error("Failed to inject content script dynamically:", chrome.runtime.lastError);
+            callback(false);
+          } else {
+            console.log("Content script injected successfully!");
+            setTimeout(() => callback(true), 150);
+          }
+        });
+      } else {
+        callback(true);
+      }
     });
   }
 
@@ -786,26 +1035,34 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
 
-          chrome.tabs.sendMessage(tab.id, {
-            action: "DOWNLOAD_VIA_HTML",
-            selector: item.selector,
-            url: item.url,
-            mediaType: item.type
-          }, (response) => {
-            if (chrome.runtime.lastError || !response || !response.success) {
-              console.warn("Canvas download failed, falling back to direct:", chrome.runtime.lastError);
+          ensureContentScriptActive(tab.id, (isActive) => {
+            if (!isActive) {
+              console.warn("Content script not active for canvas download, falling back to direct");
               directDownload(item, folder, fileExt, index, callback);
               return;
             }
 
-            // Download the data URL
-            getSequentialOrIndexFilename(folder, fileExt, index, (filename) => {
-              chrome.runtime.sendMessage({
-                action: "DOWNLOAD_MEDIA_DATAURL",
-                dataUrl: response.dataUrl,
-                filename: filename,
-                prompt: item.prompt || ""
-              }, callback);
+            chrome.tabs.sendMessage(tab.id, {
+              action: "DOWNLOAD_VIA_HTML",
+              selector: item.selector,
+              url: item.url,
+              mediaType: item.type
+            }, (response) => {
+              if (chrome.runtime.lastError || !response || !response.success) {
+                console.warn("Canvas download failed, falling back to direct:", chrome.runtime.lastError);
+                directDownload(item, folder, fileExt, index, callback);
+                return;
+              }
+
+              // Download the data URL
+              getSequentialOrIndexFilename(folder, fileExt, index, (filename) => {
+                chrome.runtime.sendMessage({
+                  action: "DOWNLOAD_MEDIA_DATAURL",
+                  dataUrl: response.dataUrl,
+                  filename: filename,
+                  prompt: item.prompt || ""
+                }, callback);
+              });
             });
           });
         });
@@ -817,22 +1074,30 @@ document.addEventListener("DOMContentLoaded", () => {
             return;
           }
           
-          chrome.tabs.sendMessage(tab.id, {
-            action: "DOWNLOAD_VIDEO_HTML",
-            url: item.url
-          }, (response) => {
-            if (chrome.runtime.lastError || !response || !response.success) {
+          ensureContentScriptActive(tab.id, (isActive) => {
+            if (!isActive) {
+              console.warn("Content script not active for video download, falling back to direct");
               directDownload(item, folder, fileExt, index, callback);
               return;
             }
 
-            getSequentialOrIndexFilename(folder, fileExt, index, (filename) => {
-              chrome.runtime.sendMessage({
-                action: "DOWNLOAD_MEDIA_DATAURL",
-                dataUrl: response.dataUrl,
-                filename: filename,
-                prompt: item.prompt || ""
-              }, callback);
+            chrome.tabs.sendMessage(tab.id, {
+              action: "DOWNLOAD_VIDEO_HTML",
+              url: item.url
+            }, (response) => {
+              if (chrome.runtime.lastError || !response || !response.success) {
+                directDownload(item, folder, fileExt, index, callback);
+                return;
+              }
+
+              getSequentialOrIndexFilename(folder, fileExt, index, (filename) => {
+                chrome.runtime.sendMessage({
+                  action: "DOWNLOAD_MEDIA_DATAURL",
+                  dataUrl: response.dataUrl,
+                  filename: filename,
+                  prompt: item.prompt || ""
+                }, callback);
+              });
             });
           });
         });
@@ -1365,6 +1630,170 @@ document.addEventListener("DOMContentLoaded", () => {
     // Esc = Close Preview
     if (e.key === "Escape") {
       closePreview();
+    }
+  });
+
+  // ==========================================
+  // ON-PAGE SELECTION & SIDEPANEL SYNC IMPLEMENTATION
+  // ==========================================
+
+  function toggleOnPageSelectionMode() {
+    getActiveTab((tab) => {
+      if (!tab || !tab.url || !tab.url.includes("meta.ai")) {
+        showToast("Please open meta.ai to select images on page!", "error");
+        return;
+      }
+
+      ensureContentScriptActive(tab.id, (isActive) => {
+        if (!isActive) {
+          showToast("Failed to initialize selection mode. Reload meta.ai page.", "error");
+          return;
+        }
+
+        if (!onPageSelectionActive) {
+          // 1. Auto-scan first to populate sidepanel Scraper gallery
+          scanActivePageMedia();
+
+          // 2. Start selection mode on the meta.ai webpage
+          chrome.tabs.sendMessage(tab.id, { action: "START_SELECTION_MODE" }, (response) => {
+            if (chrome.runtime.lastError) {
+              console.error("Error activating on-page selection:", chrome.runtime.lastError);
+              showToast("Failed to start select. Try reloading meta.ai page.", "error");
+              return;
+            }
+            
+            onPageSelectionActive = true;
+            
+            btnSelectOnPage.classList.add("active-select");
+            btnSelectOnPage.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4h-2V7h2v6h-2z"/></svg> Stop Select`;
+            
+            btnSelectOnPageQueue.classList.add("active-select");
+            btnSelectOnPageQueue.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4h-2V7h2v6h-2z"/></svg> Stop Select`;
+            
+            showToast("On-page selection active! Click images/videos on meta.ai", "success");
+          });
+        } else {
+          // Stop selection mode
+          chrome.tabs.sendMessage(tab.id, { action: "STOP_SELECTION_MODE" }, (response) => {
+            onPageSelectionActive = false;
+            
+            btnSelectOnPage.classList.remove("active-select");
+            btnSelectOnPage.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4V7h2v6h-2z"/></svg> Start Select`;
+            
+            btnSelectOnPageQueue.classList.remove("active-select");
+            btnSelectOnPageQueue.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4V7h2v6h-2z"/></svg> Start Select`;
+            
+            showToast("On-page selection stopped", "info");
+          });
+        }
+      });
+    });
+  }
+
+  function syncSelectionToGallery(selectedUrls) {
+    const checkedUrlsSet = new Set(selectedUrls);
+    
+    // Check/uncheck sidepanel checkboxes to match page selection
+    const checkboxes = document.querySelectorAll(".media-select-checkbox");
+    checkboxes.forEach(cb => {
+      const idx = parseInt(cb.getAttribute("data-index"));
+      const item = scrapedMediaList[idx];
+      if (item) {
+        cb.checked = checkedUrlsSet.has(item.url);
+      }
+    });
+
+    // Update selected counter UI
+    const count = checkedUrlsSet.size;
+    selectedCountSpan.textContent = count;
+    btnDownloadSelected.disabled = count === 0;
+  }
+
+  function syncSelectionToPage() {
+    if (!onPageSelectionActive) return;
+
+    const selectedUrls = [];
+    const checkedBoxes = document.querySelectorAll(".media-select-checkbox:checked");
+    checkedBoxes.forEach(cb => {
+      const idx = parseInt(cb.getAttribute("data-index"));
+      const item = scrapedMediaList[idx];
+      if (item) {
+        selectedUrls.push(item.url);
+      }
+    });
+
+    getActiveTab((tab) => {
+      if (tab && tab.url && tab.url.includes("meta.ai")) {
+        ensureContentScriptActive(tab.id, (isActive) => {
+          if (!isActive) return;
+          chrome.tabs.sendMessage(tab.id, {
+            action: "SYNC_SELECTION_FROM_SIDEPANEL",
+            selectedUrls: selectedUrls
+          });
+        });
+      }
+    });
+  }
+
+  function downloadOnPageSelectedList(items) {
+    if (!items || items.length === 0) return;
+    
+    showToast(`Downloading ${items.length} items from page selection...`, "info");
+    
+    // Process sequential downloads with custom delay from settings
+    let completedCount = 0;
+    let downloadIdx = 0;
+    
+    function downloadNext() {
+      if (downloadIdx >= items.length) return;
+      
+      const item = items[downloadIdx];
+      const originalIndex = downloadIdx;
+      downloadIdx++;
+      
+      downloadMediaItem(item, originalIndex, (response) => {
+        completedCount++;
+        if (response && response.success) {
+          showToast(`Downloaded ${completedCount}/${items.length}`, "success");
+        }
+        
+        if (completedCount >= items.length) {
+          showToast(`All ${items.length} page downloads completed successfully!`, "success");
+          checkboxesUncheck(); // Reset sidepanel checkboxes
+        } else {
+          chrome.storage.local.get(["settings"], (data) => {
+            const delay = (data.settings || {}).downloadDelay || 500;
+            setTimeout(downloadNext, delay);
+          });
+        }
+      });
+    }
+    
+    downloadNext();
+  }
+
+  // Listen for messages from content script
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "ON_PAGE_SELECTION_CHANGED") {
+      syncSelectionToGallery(message.selectedUrls);
+      sendResponse({ success: true });
+    }
+
+    if (message.action === "ON_PAGE_SELECTION_STOPPED") {
+      onPageSelectionActive = false;
+      
+      btnSelectOnPage.classList.remove("active-select");
+      btnSelectOnPage.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4V7h2v6h-2z"/></svg> Start Select`;
+      
+      btnSelectOnPageQueue.classList.remove("active-select");
+      btnSelectOnPageQueue.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4V7h2v6h-2z"/></svg> Start Select`;
+      
+      sendResponse({ success: true });
+    }
+
+    if (message.action === "DOWNLOAD_ON_PAGE_ITEMS") {
+      downloadOnPageSelectedList(message.items);
+      sendResponse({ success: true });
     }
   });
 });

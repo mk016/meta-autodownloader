@@ -98,6 +98,22 @@
           </div>
         </div>
 
+        <!-- Aspect Ratio Selector -->
+        <div class="media-type-selector">
+          <label class="selector-label">ASPECT RATIO</label>
+          <div class="pill-group" id="aspect-ratio-pills">
+            <button class="pill-btn active" data-ratio="9:16">
+              <span class="pill-emoji">📱</span> 9:16
+            </button>
+            <button class="pill-btn" data-ratio="16:9">
+              <span class="pill-emoji">🖥️</span> 16:9
+            </button>
+            <button class="pill-btn" data-ratio="1:1">
+              <span class="pill-emoji">⬜</span> 1:1
+            </button>
+          </div>
+        </div>
+
         <!-- Dual Configuration Row -->
         <div class="form-row split">
           <div class="form-group">
@@ -177,6 +193,23 @@ A cute cat wearing sunglasses"></textarea>
           </div>
         </div>
 
+        <!-- On-Page Selection Toggle Card in Queue -->
+        <div class="card select-activation-card">
+          <div class="card-body flex-row justify-between align-center">
+            <div class="char-info">
+              <div class="char-title flex-row align-center">
+                <svg class="star-icon select-star" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2h-2zm0-4h-2V7h2v6z"/></svg>
+                On-Page Selection
+              </div>
+              <span class="char-subtitle">Click and select any images directly on the Meta AI page</span>
+            </div>
+            <button id="btn-select-on-page-queue" class="btn btn-secondary btn-sm" style="min-width: 110px;">
+              <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2h-2zm0-4h-2V7h2v6z"/></svg>
+              Start Select
+            </button>
+          </div>
+        </div>
+
         <!-- Queue Action Buttons -->
         <div class="action-buttons-container">
           <button id="btn-start" class="btn btn-primary btn-pulse">
@@ -206,6 +239,27 @@ A cute cat wearing sunglasses"></textarea>
             <div class="empty-state">Queue is empty. Enter or upload prompts above.</div>
           </div>
         </div>
+
+        <!-- Generated Images Gallery (Preview Before Download) -->
+        <div class="generated-gallery-panel" id="generated-gallery-panel">
+          <div class="generated-gallery-header">
+            <span class="generated-gallery-title">🎨 GENERATED IMAGES</span>
+            <span class="generated-gallery-count" id="generated-gallery-count">0 images</span>
+          </div>
+          <div class="generated-gallery-actions">
+            <button id="btn-download-generated-selected" class="btn btn-primary btn-sm" disabled>
+              <svg class="btn-icon" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+              Download Selected (<span id="generated-selected-count">0</span>)
+            </button>
+            <button id="btn-clear-generated" class="btn btn-danger btn-sm" disabled>
+              <svg class="btn-icon" viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              Clear All
+            </button>
+          </div>
+          <div class="generated-gallery-grid" id="generated-gallery-grid">
+            <div class="empty-state">Generated images will appear here. Select the ones you want to download.</div>
+          </div>
+        </div>
       </section>
 
       <!-- Panel 2: Scraper -->
@@ -214,13 +268,17 @@ A cute cat wearing sunglasses"></textarea>
         <!-- Scraper Controls -->
         <div class="scraper-controls-container">
           <div class="form-row">
-            <button id="btn-scan" class="btn btn-primary" style="flex:2">
+            <button id="btn-scan" class="btn btn-primary" style="flex:1.5">
               <svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
               Scan Page
             </button>
+            <button id="btn-select-on-page" class="btn btn-secondary" style="flex:1.5">
+              <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              Start Select
+            </button>
             <button id="btn-auto-scroll-scan" class="btn btn-secondary" style="flex:1">
               <svg class="btn-icon" viewBox="0 0 24 24"><path d="M12 5.83L15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></svg>
-              Auto-Scroll
+              Scroll
             </button>
           </div>
         </div>
