@@ -64,6 +64,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnAddCharacter = document.getElementById("btn-add-character");
   const charactersListContainer = document.getElementById("characters-list-container");
 
+  // Styles
+  const activeStyleSelect = document.getElementById("active-style-select");
+  const styleNameInput = document.getElementById("style-name");
+  const stylePromptInput = document.getElementById("style-prompt");
+  const btnAddStyle = document.getElementById("btn-add-style");
+  const stylesListContainer = document.getElementById("styles-list-container");
+
   // Settings
   const settingsFolder = document.getElementById("settings-folder");
   const settingsAutoRename = document.getElementById("settings-auto-rename");
@@ -215,7 +222,9 @@ document.addEventListener("DOMContentLoaded", () => {
       "settings", 
       "characters", 
       "activeCharacterId",
-      "statusMessage"
+      "statusMessage",
+      "styles",
+      "activeStyleId"
     ], (data) => {
       const queue = data.queue || [];
       const currentIndex = data.currentIndex || 0;
@@ -224,6 +233,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const characters = data.characters || [];
       const activeCharacterId = data.activeCharacterId || "none";
       const statusMessage = data.statusMessage || "";
+      const styles = data.styles || [];
+      const activeStyleId = data.activeStyleId || "none";
 
       // 1. Update Settings
       if (settings.folderName) settingsFolder.value = settings.folderName;
@@ -255,6 +266,10 @@ document.addEventListener("DOMContentLoaded", () => {
       // 2. Update Character Dropdowns & List
       populateCharacterSelects(characters, activeCharacterId);
       renderCharactersList(characters, activeCharacterId);
+
+      // 2.5. Update Style Dropdowns & List
+      populateStyleSelects(styles, activeStyleId);
+      renderStylesList(styles, activeStyleId);
 
       // 3. Update Global Status Badges
       updateStatusBadge(status, statusMessage);
@@ -779,7 +794,7 @@ document.addEventListener("DOMContentLoaded", () => {
     autoScrollScan();
   });
 
-  function scanActivePageMedia() {
+  function scanActivePageMedia(bypassEnsure = false) {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const activeTab = tabs[0];
       if (!activeTab || !activeTab.url || !activeTab.url.includes("meta.ai")) {
@@ -790,18 +805,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
       btnScan.innerHTML = `<svg class="btn-icon spinner" viewBox="0 0 24 24"><path d="M12 4V2C6.48 2 2 6.48 2 12h2c0-4.42 3.58-8 8-8z"/></svg> Scanning...`;
 
-      ensureContentScriptActive(activeTab.id, (isActive) => {
-        if (!isActive) {
-          btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
-          showToast("Failed to initialize scanner. Reload meta.ai page.", "error");
-          return;
-        }
-
+      const executeScrape = () => {
         chrome.tabs.sendMessage(activeTab.id, { action: "SCRAPE_PAGE" }, (response) => {
           btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
           
           if (chrome.runtime.lastError || !response || !response.media) {
-            console.error("Scraping error:", chrome.runtime.lastError);
+            console.error("Scraping error:", chrome.runtime.lastError ? chrome.runtime.lastError.message : "No response from script");
             scraperGallery.innerHTML = `<div class="empty-state">Failed to scan. Ensure you are on meta.ai and reload the page.</div>`;
             showToast("Scan failed. Reload meta.ai page.", "error");
             return;
@@ -811,7 +820,20 @@ document.addEventListener("DOMContentLoaded", () => {
           renderScraperGallery(scrapedMediaList);
           showToast(`Found ${scrapedMediaList.length} media items`, "success");
         });
-      });
+      };
+
+      if (bypassEnsure) {
+        executeScrape();
+      } else {
+        ensureContentScriptActive(activeTab.id, (isActive) => {
+          if (!isActive) {
+            btnScan.innerHTML = `<svg class="btn-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg> Scan Page`;
+            showToast("Failed to initialize scanner. Reload meta.ai page.", "error");
+            return;
+          }
+          executeScrape();
+        });
+      }
     });
   }
 
@@ -1005,11 +1027,11 @@ document.addEventListener("DOMContentLoaded", () => {
           files: ["content.js"]
         }, () => {
           if (chrome.runtime.lastError) {
-            console.error("Failed to inject content script dynamically:", chrome.runtime.lastError);
+            console.error("Failed to inject content script dynamically:", chrome.runtime.lastError.message || chrome.runtime.lastError);
             callback(false);
           } else {
             console.log("Content script injected successfully!");
-            setTimeout(() => callback(true), 150);
+            setTimeout(() => callback(true), 250); // increased delay to guarantee message listener initialization
           }
         });
       } else {
@@ -1494,6 +1516,112 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   // ==========================================
+  // STYLE CONSISTENCY PROFILES
+  // ==========================================
+  if (btnAddStyle) {
+    btnAddStyle.addEventListener("click", () => {
+      const name = styleNameInput.value.trim();
+      const prompt = stylePromptInput.value.trim();
+
+      if (!name || !prompt) {
+        showToast("Please fill both Style Name and Prompts!", "warning");
+        return;
+      }
+
+      chrome.storage.local.get(["styles"], (data) => {
+        const styles = data.styles || [];
+        const newStyle = {
+          id: "style_" + Date.now(),
+          name: name,
+          promptText: prompt
+        };
+        
+        styles.push(newStyle);
+        chrome.storage.local.set({ styles: styles }, () => {
+          styleNameInput.value = "";
+          stylePromptInput.value = "";
+          showToast(`Style Profile "${name}" saved!`, "success");
+        });
+      });
+    });
+  }
+
+  function populateStyleSelects(styles, activeId) {
+    if (!activeStyleSelect) return;
+    activeStyleSelect.innerHTML = `<option value="none">Disabled</option>`;
+    
+    styles.forEach(style => {
+      const opt = document.createElement("option");
+      opt.value = style.id;
+      opt.textContent = style.name;
+      if (style.id === activeId) opt.selected = true;
+      activeStyleSelect.appendChild(opt);
+    });
+  }
+
+  if (activeStyleSelect) {
+    activeStyleSelect.addEventListener("change", (e) => {
+      chrome.storage.local.set({ activeStyleId: e.target.value });
+    });
+  }
+
+  function renderStylesList(styles, activeId) {
+    if (!stylesListContainer) return;
+    stylesListContainer.innerHTML = "";
+    if (styles.length === 0) {
+      stylesListContainer.innerHTML = `<div class="empty-state">No style profiles saved yet. Add one above!</div>`;
+      return;
+    }
+
+    styles.forEach(style => {
+      const item = document.createElement("div");
+      item.className = `character-item ${style.id === activeId ? "active" : ""}`;
+      
+      item.innerHTML = `
+        <div class="char-card-info">
+          <span class="char-card-name">${style.name}</span>
+          <span class="char-card-desc" title="${style.promptText}">${style.promptText}</span>
+        </div>
+        <div class="char-card-actions">
+          <button class="btn-style-delete" data-id="${style.id}" title="Delete style profile">
+            <svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          </button>
+        </div>
+      `;
+      
+      item.querySelector(".char-card-info").addEventListener("click", () => {
+        const nextActiveId = style.id === activeId ? "none" : style.id;
+        chrome.storage.local.set({ activeStyleId: nextActiveId });
+      });
+
+      item.querySelector(".btn-style-delete").addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete "${style.name}" style profile?`)) {
+          deleteStyle(style.id);
+        }
+      });
+
+      stylesListContainer.appendChild(item);
+    });
+  }
+
+  function deleteStyle(id) {
+    chrome.storage.local.get(["styles", "activeStyleId"], (data) => {
+      let styles = data.styles || [];
+      let activeId = data.activeStyleId;
+      
+      styles = styles.filter(s => s.id !== id);
+      if (activeId === id) activeId = "none";
+
+      chrome.storage.local.set({ 
+        styles: styles,
+        activeStyleId: activeId
+      });
+      showToast("Style Profile deleted", "info");
+    });
+  }
+
+  // ==========================================
   // SETTINGS PANEL
   // ==========================================
   function saveSettingsField(key, value) {
@@ -1651,13 +1779,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         if (!onPageSelectionActive) {
-          // 1. Auto-scan first to populate sidepanel Scraper gallery
-          scanActivePageMedia();
+          // 1. Auto-scan first to populate sidepanel Scraper gallery (Bypassing redundant script checks to avoid race conditions)
+          scanActivePageMedia(true);
 
           // 2. Start selection mode on the meta.ai webpage
           chrome.tabs.sendMessage(tab.id, { action: "START_SELECTION_MODE" }, (response) => {
             if (chrome.runtime.lastError) {
-              console.error("Error activating on-page selection:", chrome.runtime.lastError);
+              console.error("Error activating on-page selection:", chrome.runtime.lastError.message || chrome.runtime.lastError);
               showToast("Failed to start select. Try reloading meta.ai page.", "error");
               return;
             }

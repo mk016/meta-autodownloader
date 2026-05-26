@@ -303,6 +303,7 @@ function simulateTyping(element, text) {
     element.dispatchEvent(new Event('change', { bubbles: true }));
   } else {
     // Contenteditable div (React / standard web editors)
+    element.focus();
     const selection = window.getSelection();
     if (selection) {
       selection.removeAllRanges();
@@ -311,9 +312,9 @@ function simulateTyping(element, text) {
       selection.addRange(range);
     }
     
-    // Clear and insert text using execCommand which updates React's internal state
-    element.innerHTML = "";
+    // Clear and insert text using selectAll and insertText which cleanly updates React/Lexical's internal state
     try {
+      document.execCommand('selectAll', false, null);
       document.execCommand('insertText', false, text);
     } catch (e) {
       console.warn("execCommand failed, falling back to innerText setter:", e);
@@ -378,20 +379,26 @@ async function executePromptAutomation(prompt, index) {
 function getPageMediaUrls() {
   const urls = new Set();
   
-  // Fetch images
-  document.querySelectorAll('img').forEach(img => {
-    const src = img.src || img.getAttribute('src');
-    if (src && isAIResource(src)) {
-      urls.add(src);
-    }
-  });
+  // Only search inside chat bubbles to avoid sidebar/home-page false positives
+  const bubbles = document.querySelectorAll('[role="article"], [class*="message"]');
+  if (bubbles.length === 0) return urls;
+  
+  bubbles.forEach(bubble => {
+    // Fetch images
+    bubble.querySelectorAll('img').forEach(img => {
+      const src = img.src || img.getAttribute('src');
+      if (src && isAIResource(src)) {
+        urls.add(src);
+      }
+    });
 
-  // Fetch videos
-  document.querySelectorAll('video').forEach(vid => {
-    const src = vid.src || vid.currentSrc || vid.querySelector('source')?.src;
-    if (src) {
-      urls.add(src);
-    }
+    // Fetch videos
+    bubble.querySelectorAll('video').forEach(vid => {
+      const src = vid.src || vid.currentSrc || vid.querySelector('source')?.src;
+      if (src) {
+        urls.add(src);
+      }
+    });
   });
 
   return urls;
@@ -437,13 +444,54 @@ function getUniqueSelector(el) {
   return path.join(' > ');
 }
 
+// Helper: Checks the latest message bubble for common Meta AI generation errors/warnings
+function checkLatestBubbleForError() {
+  const bubbles = document.querySelectorAll('[role="article"], [class*="message"]');
+  if (bubbles.length === 0) return null;
+  
+  const latestBubble = bubbles[bubbles.length - 1];
+  const text = latestBubble.innerText || "";
+  
+  const errorKeywords = [
+    "something went wrong",
+    "can't generate",
+    "cannot generate",
+    "can't create",
+    "cannot create",
+    "violate our policies",
+    "violate our terms",
+    "policy violation",
+    "inappropriate content",
+    "try a different prompt",
+    "support this request",
+    "limit reached"
+  ];
+  
+  for (const kw of errorKeywords) {
+    if (text.toLowerCase().includes(kw)) {
+      return `Meta AI Error: ${text.substring(0, 150)}...`;
+    }
+  }
+  
+  return null;
+}
+
 // Watch for new media to appear on the page
-function waitForNewMedia(existingMedia, timeoutSeconds = 90) {
+function waitForNewMedia(existingMedia, timeoutSeconds = 45) {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
     
     // Polling function to check for new images/videos
     const checkInterval = setInterval(() => {
+      // 1. Fast-fail checking for content policy blocks or server errors
+      const errorMsg = checkLatestBubbleForError();
+      if (errorMsg) {
+        clearInterval(checkInterval);
+        console.error("Meta AI generation fast-fail detected:", errorMsg);
+        reject(new Error(errorMsg));
+        return;
+      }
+
       const currentMediaUrls = getPageMediaUrls();
       const newUrls = [];
       
@@ -456,8 +504,17 @@ function waitForNewMedia(existingMedia, timeoutSeconds = 90) {
       // If we found new media
       if (newUrls.length > 0) {
         // Meta AI might render a video or low-res image first.
-        // Let's verify if the generating indicators are gone, or wait a short moment for final assets.
-        const isGenerating = document.querySelector('[role="progressbar"], .generating, [class*="loading"], [class*="spinner"]') !== null;
+        // Verify if the generating indicators in the LATEST bubble are gone.
+        // We only scan the latest message bubble to avoid being desynced by lazy-loaded sidebar spinner classes!
+        let isGenerating = false;
+        const bubbles = document.querySelectorAll('[role="article"], [class*="message"]');
+        if (bubbles.length > 0) {
+          const latestBubble = bubbles[bubbles.length - 1];
+          isGenerating = latestBubble.querySelector('[role="progressbar"], .generating, [class*="loading"], [class*="spinner"]') !== null;
+        } else {
+          // Fallback
+          isGenerating = document.querySelector('[role="progressbar"], .generating') !== null;
+        }
         
         if (!isGenerating) {
           clearInterval(checkInterval);
@@ -470,7 +527,7 @@ function waitForNewMedia(existingMedia, timeoutSeconds = 90) {
       if (Date.now() - startTime > timeoutSeconds * 1000) {
         clearInterval(checkInterval);
         
-        // If we found some new URLs but they were marked as generating, let's return them anyway as fallback
+        // If we found some new URLs but they were marked as generating, return them anyway as fallback
         if (newUrls.length > 0) {
           console.log("Timeout reached, returning found media anyway:", newUrls);
           resolve(newUrls);
@@ -569,26 +626,58 @@ const SELECTION_STYLES = `
   .meta-ai-flow-selectable {
     pointer-events: auto !important;
     cursor: pointer !important;
-    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-    outline: 3px solid transparent !important;
-    outline-offset: -3px !important;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
     position: relative !important;
     z-index: 1000 !important;
   }
 
   .meta-ai-flow-selectable:hover {
-    outline: 4px solid #00E5FF !important;
-    box-shadow: 0 0 20px rgba(0, 229, 255, 0.7) !important;
-    transform: scale(1.01) !important;
-    filter: brightness(1.05) !important;
+    transform: scale(1.015) translateY(-2px) !important;
+    box-shadow: 0 10px 25px rgba(0, 229, 255, 0.3) !important;
+    filter: brightness(1.03) !important;
   }
 
   .meta-ai-flow-selected {
-    outline: 5px solid #0066FF !important;
-    box-shadow: 0 0 30px rgba(0, 102, 255, 0.9) !important;
-    transform: scale(1.02) !important;
-    filter: brightness(1.1) !important;
+    outline: 4px solid #00E5FF !important;
+    outline-offset: -4px !important;
+    box-shadow: 0 12px 35px rgba(0, 102, 255, 0.6), 0 0 0 4px rgba(0, 229, 255, 0.4) !important;
+    transform: scale(1.03) translateY(-4px) !important;
+    filter: brightness(1.08) !important;
     z-index: 1001 !important;
+  }
+
+  /* Floating checkmark badge popup */
+  .meta-ai-flow-checkmark-badge {
+    position: absolute !important;
+    top: 12px !important;
+    right: 12px !important;
+    z-index: 1002 !important;
+    
+    background: linear-gradient(135deg, #00C853 0%, #00E676 100%) !important;
+    color: #FFFFFF !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+    font-weight: 800 !important;
+    font-size: 16px !important;
+    line-height: 1 !important;
+    
+    width: 28px !important;
+    height: 28px !important;
+    border-radius: 50% !important;
+    
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    
+    border: 2px solid #FFFFFF !important;
+    box-shadow: 0 4px 12px rgba(0, 230, 118, 0.5), 0 0 10px rgba(0, 230, 118, 0.3) !important;
+    
+    animation: badgePop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards !important;
+    pointer-events: none !important;
+  }
+
+  @keyframes badgePop {
+    from { transform: scale(0); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
   }
 
   /* Floating Control Banner */
@@ -797,6 +886,11 @@ function stopOnPageSelection() {
     el.classList.remove('meta-ai-flow-selectable', 'meta-ai-flow-selected');
   });
 
+  // Remove all floating checkmark badges
+  document.querySelectorAll('.meta-ai-flow-checkmark-badge').forEach(badge => {
+    badge.remove();
+  });
+
   // 5. Remove global click intercepting listener
   document.removeEventListener('click', handleOnPageClick, true);
 
@@ -821,11 +915,31 @@ function scanAndSetupSelectableElements() {
           img.classList.add('meta-ai-flow-selectable');
         }
         
-        // Sync selected state visually
+        // Sync selected state visually & badge popup
         if (selectedOnPageMedia.has(src)) {
           img.classList.add('meta-ai-flow-selected');
+          
+          // Add checkmark badge
+          const parent = img.parentElement;
+          if (parent) {
+            parent.style.setProperty('position', 'relative', 'important');
+            let badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+            if (!badge) {
+              badge = document.createElement('div');
+              badge.className = 'meta-ai-flow-checkmark-badge';
+              badge.innerHTML = '✓';
+              parent.appendChild(badge);
+            }
+          }
         } else {
           img.classList.remove('meta-ai-flow-selected');
+          
+          // Remove checkmark badge
+          const parent = img.parentElement;
+          if (parent) {
+            const badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+            if (badge) badge.remove();
+          }
         }
       }
     }
@@ -839,11 +953,31 @@ function scanAndSetupSelectableElements() {
         vid.classList.add('meta-ai-flow-selectable');
       }
       
-      // Sync selected state visually
+      // Sync selected state visually & badge popup
       if (selectedOnPageMedia.has(src)) {
         vid.classList.add('meta-ai-flow-selected');
+        
+        // Add checkmark badge
+        const parent = vid.parentElement;
+        if (parent) {
+          parent.style.setProperty('position', 'relative', 'important');
+          let badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+          if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'meta-ai-flow-checkmark-badge';
+            badge.innerHTML = '✓';
+            parent.appendChild(badge);
+          }
+        }
       } else {
         vid.classList.remove('meta-ai-flow-selected');
+        
+        // Remove checkmark badge
+        const parent = vid.parentElement;
+        if (parent) {
+          const badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+          if (badge) badge.remove();
+        }
       }
     }
   });
@@ -910,9 +1044,29 @@ function toggleOnPageMediaSelection(element, url) {
   if (selectedOnPageMedia.has(url)) {
     selectedOnPageMedia.delete(url);
     element.classList.remove('meta-ai-flow-selected');
+    
+    // Remove checkmark badge popup
+    const parent = element.parentElement;
+    if (parent) {
+      const badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+      if (badge) badge.remove();
+    }
   } else {
     selectedOnPageMedia.set(url, item);
     element.classList.add('meta-ai-flow-selected');
+    
+    // Inject checkmark badge popup
+    const parent = element.parentElement;
+    if (parent) {
+      parent.style.setProperty('position', 'relative', 'important');
+      let badge = parent.querySelector('.meta-ai-flow-checkmark-badge');
+      if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'meta-ai-flow-checkmark-badge';
+        badge.innerHTML = '✓';
+        parent.appendChild(badge);
+      }
+    }
   }
 
   updateOnPageBannerUI();

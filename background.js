@@ -17,7 +17,9 @@ chrome.runtime.onInstalled.addListener(() => {
     "downloadHistory",
     "stats",
     "theme",
-    "pendingMedia"
+    "pendingMedia",
+    "styles",
+    "activeStyleId"
   ], (result) => {
     const defaults = {};
     if (result.queue === undefined) defaults.queue = [];
@@ -25,6 +27,36 @@ chrome.runtime.onInstalled.addListener(() => {
     if (result.status === undefined) defaults.status = "idle";
     if (result.characters === undefined) defaults.characters = [];
     if (result.activeCharacterId === undefined) defaults.activeCharacterId = "none";
+    if (result.styles === undefined) {
+      defaults.styles = [
+        { id: "style_cyberpunk", name: "Cyberpunk Glow", promptText: "cyberpunk style, highly detailed, glowing neon lights, dark rainy streets, cinematic volumetric atmosphere, octane render, 8k" },
+        { id: "style_pixar", name: "3D Pixar", promptText: "3d disney pixar style, cute animated character concept, highly detailed claymation texture, vibrant color palette, soft volumetric studio lighting, render" },
+        { id: "style_photorealistic", name: "Photorealistic Cinema", promptText: "photorealistic, shot on 35mm camera, cinematic film aesthetic, highly detailed face textures, natural soft studio lighting, volumetric light, 8k resolution" },
+        { id: "style_anime", name: "Vibrant Anime", promptText: "vibrant anime style illustration, detailed background landscape, colorful aesthetics, beautiful dramatic skies, studio ghibli inspired artwork, 4k" },
+        { id: "style_horror", name: "Dark Horror", promptText: "dark horror theme, creepy eerie atmosphere, dim atmospheric lighting, heavy shadows, haunting mysterious vibes, highly detailed gothic design, suspenseful, 4k resolution" },
+        { id: "style_2dpaint", name: "2D Animated Painting", promptText: "2d animated watercolor painting, beautiful artistic brush strokes, soft hand-drawn illustrations, colorful expressive paint drips, dreamy storybook aesthetic, fluid motion texture, whimsical 2d animation concept" },
+        { id: "style_2d_horror_storybook", name: "2D Horror Storybook", promptText: "illustrated in a 2D horror storybook animation style, gritty watercolor and charcoal texture, rough expressive brushwork, imperfect sketch lines, dark fantasy nightmare aesthetic, dramatic high-contrast lighting, desaturated eerie tones, atmospheric cinematic depth, subtle animated fog drift, frame-by-frame tradigital feel, no 3D rendering, widescreen horror composition, avoiding: 3D, realistic CGI, glossy render, anime, bright colors, modern city, comedy tone, clean vector art, plastic texture, futuristic elements, over-smooth motion, photorealism" }
+      ];
+    } else {
+      // Migrate/inject new default styles if not already present
+      let styles = result.styles || [];
+      let updated = false;
+      const newDefaults = [
+        { id: "style_horror", name: "Dark Horror", promptText: "dark horror theme, creepy eerie atmosphere, dim atmospheric lighting, heavy shadows, haunting mysterious vibes, highly detailed gothic design, suspenseful, 4k resolution" },
+        { id: "style_2dpaint", name: "2D Animated Painting", promptText: "2d animated watercolor painting, beautiful artistic brush strokes, soft hand-drawn illustrations, colorful expressive paint drips, dreamy storybook aesthetic, fluid motion texture, whimsical 2d animation concept" },
+        { id: "style_2d_horror_storybook", name: "2D Horror Storybook", promptText: "illustrated in a 2D horror storybook animation style, gritty watercolor and charcoal texture, rough expressive brushwork, imperfect sketch lines, dark fantasy nightmare aesthetic, dramatic high-contrast lighting, desaturated eerie tones, atmospheric cinematic depth, subtle animated fog drift, frame-by-frame tradigital feel, no 3D rendering, widescreen horror composition, avoiding: 3D, realistic CGI, glossy render, anime, bright colors, modern city, comedy tone, clean vector art, plastic texture, futuristic elements, over-smooth motion, photorealism" }
+      ];
+      newDefaults.forEach(ds => {
+        if (!styles.some(s => s.id === ds.id)) {
+          styles.push(ds);
+          updated = true;
+        }
+      });
+      if (updated) {
+        defaults.styles = styles;
+      }
+    }
+    if (result.activeStyleId === undefined) defaults.activeStyleId = "none";
     if (result.downloadCounter === undefined) defaults.downloadCounter = 0;
     if (result.downloadHistory === undefined) defaults.downloadHistory = [];
     if (result.theme === undefined) defaults.theme = "dark";
@@ -61,6 +93,10 @@ chrome.runtime.onInstalled.addListener(() => {
 
 // Keep track of the active timeout for the queue delay
 let queueTimeoutId = null;
+
+// Keep track of communication retry attempts to prevent infinite stalling on connection drops
+let commsRetryCount = 0;
+let lastRetryIndex = -1;
 
 // Listen for messages from content script or side panel
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -294,6 +330,9 @@ function startQueue(senderTabId) {
     queueTimeoutId = null;
   }
   
+  commsRetryCount = 0;
+  lastRetryIndex = -1;
+  
   chrome.storage.local.set({ status: "running", statusMessage: "Starting queue..." }, () => {
     processNextPrompt(senderTabId);
   });
@@ -317,7 +356,7 @@ function stopQueue() {
 
 // Send the next prompt in the queue to the Meta AI tab
 function processNextPrompt(preferredTabId) {
-  chrome.storage.local.get(["queue", "currentIndex", "status", "settings", "characters", "activeCharacterId"], (data) => {
+  chrome.storage.local.get(["queue", "currentIndex", "status", "settings", "characters", "activeCharacterId", "styles", "activeStyleId"], (data) => {
     if (data.status !== "running") return;
     
     const queue = data.queue || [];
@@ -327,6 +366,11 @@ function processNextPrompt(preferredTabId) {
       console.log("Queue processing complete!");
       chrome.storage.local.set({ status: "idle", currentIndex: 0, statusMessage: "Queue complete!" });
       return;
+    }
+    
+    if (index !== lastRetryIndex) {
+      commsRetryCount = 0;
+      lastRetryIndex = index;
     }
     
     const rawPrompt = queue[index];
@@ -340,16 +384,29 @@ function processNextPrompt(preferredTabId) {
       }
     }
     
-    // Append aspect ratio instruction to prompt
+    // Check if style consistency is enabled and active (appended to prompt)
+    if (data.activeStyleId && data.activeStyleId !== "none") {
+      const activeStyle = (data.styles || []).find(s => s.id === data.activeStyleId);
+      if (activeStyle && activeStyle.promptText) {
+        finalPrompt = `${finalPrompt}, ${activeStyle.promptText}`;
+      }
+    }
+    
+    // Append media type and aspect ratio instruction to prompt
     const settings = data.settings || {};
+    const mediaType = settings.mediaType || "both";
     const aspectRatio = settings.aspectRatio || "9:16";
+    
     const ratioLabels = {
       "9:16": "portrait 9:16",
       "16:9": "landscape 16:9",
       "1:1": "square 1:1"
     };
     const ratioLabel = ratioLabels[aspectRatio] || "portrait 9:16";
-    finalPrompt = `Imagine ${finalPrompt}, generate the image in ${ratioLabel} aspect ratio`;
+    
+    // Choose correct media label based on user selection (image vs video)
+    const mediaLabel = (mediaType === "videos" || mediaType === "both") ? "video" : "image";
+    finalPrompt = `Imagine ${finalPrompt}, generate the ${mediaLabel} in ${ratioLabel} aspect ratio`;
     
     // Find a Meta AI tab to send the prompt to
     findMetaAITab(preferredTabId, (tab) => {
@@ -369,8 +426,18 @@ function processNextPrompt(preferredTabId) {
       }, (response) => {
         if (chrome.runtime.lastError) {
           console.log("Error communicating with content script, retrying...", chrome.runtime.lastError.message);
-          chrome.storage.local.set({ statusMessage: "Error: Please reload meta.ai page!" });
-          queueTimeoutId = setTimeout(() => processNextPrompt(tab.id), 5000);
+          commsRetryCount++;
+          if (commsRetryCount >= 3) {
+            console.log("Max retries reached for index", index, ". Skipping...");
+            commsRetryCount = 0;
+            handlePromptFailed("Connection dropped. Skipped.", tab.id);
+          } else {
+            chrome.storage.local.set({ statusMessage: `Connection lost. Retrying (Attempt ${commsRetryCount}/3)...` });
+            queueTimeoutId = setTimeout(() => processNextPrompt(tab.id), 3000);
+          }
+        } else {
+          // Reset retry count on successful communication
+          commsRetryCount = 0;
         }
       });
     });
@@ -530,3 +597,25 @@ function handlePromptFailed(error, tabId) {
     });
   });
 }
+
+// Run a quick migration to append new default styles if missing on service worker startup
+chrome.storage.local.get(["styles"], (result) => {
+  if (result.styles) {
+    let styles = result.styles;
+    let updated = false;
+    const newDefaults = [
+      { id: "style_horror", name: "Dark Horror", promptText: "dark horror theme, creepy eerie atmosphere, dim atmospheric lighting, heavy shadows, haunting mysterious vibes, highly detailed gothic design, suspenseful, 4k resolution" },
+      { id: "style_2dpaint", name: "2D Animated Painting", promptText: "2d animated watercolor painting, beautiful artistic brush strokes, soft hand-drawn illustrations, colorful expressive paint drips, dreamy storybook aesthetic, fluid motion texture, whimsical 2d animation concept" },
+      { id: "style_2d_horror_storybook", name: "2D Horror Storybook", promptText: "illustrated in a 2D horror storybook animation style, gritty watercolor and charcoal texture, rough expressive brushwork, imperfect sketch lines, dark fantasy nightmare aesthetic, dramatic high-contrast lighting, desaturated eerie tones, atmospheric cinematic depth, subtle animated fog drift, frame-by-frame tradigital feel, no 3D rendering, widescreen horror composition, avoiding: 3D, realistic CGI, glossy render, anime, bright colors, modern city, comedy tone, clean vector art, plastic texture, futuristic elements, over-smooth motion, photorealism" }
+    ];
+    newDefaults.forEach(ds => {
+      if (!styles.some(s => s.id === ds.id)) {
+        styles.push(ds);
+        updated = true;
+      }
+    });
+    if (updated) {
+      chrome.storage.local.set({ styles: styles });
+    }
+  }
+});
