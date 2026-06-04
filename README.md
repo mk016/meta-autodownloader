@@ -490,7 +490,7 @@ Distributed under the **MIT License**. See `LICENSE` for more information.
 ```
 MIT License
 
-Copyright (c) 20 mk016
+Copyright (c) 2026 mk016
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
