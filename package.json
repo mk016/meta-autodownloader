@@ -1,0 +1,7 @@
+{
+  "name": "meta-ai-flow",
+  "version": "2.0.0",
+  "description": "Meta AI Flow - Automator & Downloader Chrome Extension",
+  "private": true,
+  "dependencies": {}
+}
