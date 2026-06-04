@@ -3,7 +3,7 @@
   "name": "AI Flow for Meta.ai - Automator & Downloader",
   "short_name": "AI Flow",
   "version": "2.0",
-  "description": "Bulk generate, scrape and download images & videos from Meta AI. Features canvas watermark removal, queue automation and sequential naming.",
+  "description": "Bulk generate, scrape and download images & videos from Meta AI. Watermark-free canvas extraction and queue automation.",
   "minimum_chrome_version": "114",
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'self'"
